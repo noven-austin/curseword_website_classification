@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech Classifier</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/3.6.0/tf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow-models/speech-commands/0.4.2/speech-commands.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        button {
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+            margin: 10px 0;
+            width: 200px;
+        }
+        button:hover {
+            background-color: #356ac3;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .result-container {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 8px;
+            background-color: #f0f7ff;
+        }
+        .bar-chart {
+            margin-top: 20px;
+        }
+        .bar {
+            height: 30px;
+            margin: 5px 0;
+            background-color: #4285f4;
+            transition: width 0.3s ease;
+            border-radius: 3px;
+            position: relative;
+        }
+        .bar-label {
+            position: absolute;
+            left: 10px;
+            top: 6px;
+            color: white;
+            font-weight: bold;
+        }
+        .confidence-value {
+            position: absolute;
+            right: 10px;
+            top: 6px;
+            color: white;
+        }
+        .status {
+            text-align: center;
+            margin: 20px 0;
+            color: #666;
+        }
+        .prediction {
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            margin: 20px 0;
+            color: #333;
+        }
+        .threshold-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        input[type="range"] {
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Speech Classifier</h1>
+        
+        <div class="controls">
+            <button id="startButton">Start Listening</button>
+            <button id="stopButton" disabled>Stop Listening</button>
+        </div>
+        
+        <div class="threshold-container">
+            <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.75</span></label>
+            <input type="range" id="thresholdSlider" min="0.1" max="0.95" step="0.05" value="0.75">
+        </div>
+        
+        <div class="status" id="status">Model loading...</div>
+        
+        <div class="prediction" id="prediction"></div>
+        
+        <div class="result-container">
+            <h3>Classification Results:</h3>
+            <div id="barChart" class="bar-chart"></div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let model;
+        let classifier;
+        let labels = [];
+        let isListening = false;
+        let confidenceThreshold = 0.75;
+
+        // DOM elements
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusDiv = document.getElementById('status');
+        const predictionDiv = document.getElementById('prediction');
+        const barChartDiv = document.getElementById('barChart');
+        const thresholdSlider = document.getElementById('thresholdSlider');
+        const thresholdValue = document.getElementById('thresholdValue');
+
+        // Set up event listeners
+        startButton.addEventListener('click', startListening);
+        stopButton.addEventListener('click', stopListening);
+        thresholdSlider.addEventListener('input', updateThreshold);
+
+        // Initialize the application
+        async function init() {
+            try {
+                statusDiv.textContent = 'Loading model...';
+                
+                // Load the model using TFJS SpeechCommands
+                const recognizer = speechCommands.create(
+                    'BROWSER_FFT',
+                    undefined,
+                    './model.json',
+                    './metadata.json'
+                );
+                
+                await recognizer.ensureModelLoaded();
+                
+                // Get labels from the model
+                labels = recognizer.wordLabels();
+                console.log('Labels:', labels);
+                
+                // Initialize the UI
+                createBarChart();
+                
+                // Store the recognizer for later use
+                classifier = recognizer;
+                
+                // Enable the start button
+                startButton.disabled = false;
+                statusDiv.textContent = 'Model loaded! Click "Start Listening" to begin.';
+            } catch (error) {
+                console.error('Error initializing the model:', error);
+                statusDiv.textContent = 'Error loading model: ' + error.message;
+            }
+        }
+
+        // Start listening to the microphone
+        async function startListening() {
+            if (!classifier || isListening) return;
+            
+            try {
+                statusDiv.textContent = 'Listening...';
+                
+                // Request microphone permission
+                await classifier.listen(
+                    result => {
+                        // Process the classification result
+                        const scores = Array.from(result.scores);
+                        updateBarChart(scores);
+                        
+                        // Find the highest scoring label
+                        const maxScoreIndex = scores.indexOf(Math.max(...scores));
+                        const prediction = labels[maxScoreIndex];
+                        const confidence = scores[maxScoreIndex];
+                        
+                        // Only show prediction if confidence is above threshold
+                        if (confidence >= confidenceThreshold) {
+                            predictionDiv.textContent = `Prediction: ${prediction}`;
+                        } else {
+                            predictionDiv.textContent = 'Confidence too low';
+                        }
+                    },
+                    {
+                        probabilityThreshold: 0.75,
+                        overlapFactor: 0.5
+                    }
+                );
+                
+                // Update UI
+                isListening = true;
+                startButton.disabled = true;
+                stopButton.disabled = false;
+            } catch (error) {
+                console.error('Error starting the microphone:', error);
+                statusDiv.textContent = 'Error accessing microphone: ' + error.message;
+            }
+        }
+
+        // Stop listening to the microphone
+        function stopListening() {
+            if (!classifier || !isListening) return;
+            
+            classifier.stopListening();
+            
+            // Update UI
+            isListening = false;
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            statusDiv.textContent = 'Listening stopped. Click "Start Listening" to begin again.';
+        }
+
+        // Update the confidence threshold
+        function updateThreshold() {
+            confidenceThreshold = parseFloat(thresholdSlider.value);
+            thresholdValue.textContent = confidenceThreshold;
+        }
+
+        // Create an empty bar chart
+        function createBarChart() {
+            barChartDiv.innerHTML = '';
+            
+            labels.forEach(label => {
+                const barContainer = document.createElement('div');
+                barContainer.style.position = 'relative';
+                barContainer.style.marginBottom = '10px';
+                
+                const bar = document.createElement('div');
+                bar.className = 'bar';
+                bar.style.width = '0%';
+                bar.id = `bar-${label}`;
+                
+                const barLabel = document.createElement('span');
+                barLabel.className = 'bar-label';
+                barLabel.textContent = label;
+                
+                const confidenceValue = document.createElement('span');
+                confidenceValue.className = 'confidence-value';
+                confidenceValue.id = `confidence-${label}`;
+                confidenceValue.textContent = '0%';
+                
+                bar.appendChild(barLabel);
+                bar.appendChild(confidenceValue);
+                barContainer.appendChild(bar);
+                barChartDiv.appendChild(barContainer);
+            });
+        }
+
+        // Update the bar chart with new scores
+        function updateBarChart(scores) {
+            labels.forEach((label, index) => {
+                const bar = document.getElementById(`bar-${label}`);
+                const confidenceValue = document.getElementById(`confidence-${label}`);
+                
+                const widthPercentage = Math.round(scores[index] * 100);
+                bar.style.width = `${widthPercentage}%`;
+                confidenceValue.textContent = `${widthPercentage}%`;
+            });
+        }
+
+        // Start the application
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
